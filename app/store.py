@@ -121,12 +121,51 @@ CREATE TABLE IF NOT EXISTS reconcile (
     note       TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS corrections (
+    correction_id   TEXT NOT NULL,
+    run_id          TEXT NOT NULL,
+    source_row      INTEGER NOT NULL,
+    status          TEXT NOT NULL,
+    sensor_id       TEXT,
+    sampled_at      TEXT,
+    offset_seconds  INTEGER,
+    value_text      TEXT,
+    unit_text       TEXT,
+    quality         TEXT,
+    ingest_seq      INTEGER,
+    note            TEXT NOT NULL,
+    validate_code   TEXT,
+    validate_detail TEXT,
+    bucket_utc      TEXT,
+    content_hash    TEXT NOT NULL,
+    attempts        INTEGER NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (run_id, correction_id)
+);
+
+CREATE TABLE IF NOT EXISTS run_revisions (
+    run_id        TEXT NOT NULL,
+    revision_no   INTEGER NOT NULL,
+    state         TEXT NOT NULL,
+    base_run_id   TEXT NOT NULL,
+    promoted_at   TEXT,
+    correction_ids_json TEXT NOT NULL,
+    counts_json   TEXT,
+    totals_json   TEXT,
+    error_code    TEXT,
+    error_detail  TEXT,
+    PRIMARY KEY (run_id, revision_no)
+);
+
 CREATE INDEX IF NOT EXISTS idx_samples_run ON samples(run_id);
 CREATE INDEX IF NOT EXISTS idx_quarantine_run ON quarantine(run_id);
 CREATE INDEX IF NOT EXISTS idx_grid_run ON grid(run_id);
 CREATE INDEX IF NOT EXISTS idx_windows_run ON windows(run_id);
 CREATE INDEX IF NOT EXISTS idx_reconcile_run ON reconcile(run_id);
 CREATE INDEX IF NOT EXISTS idx_duplicates_run ON duplicates(run_id);
+CREATE INDEX IF NOT EXISTS idx_corrections_run ON corrections(run_id);
+CREATE INDEX IF NOT EXISTS idx_revisions_run ON run_revisions(run_id);
 """
 
 

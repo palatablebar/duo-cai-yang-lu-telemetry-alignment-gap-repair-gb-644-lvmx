@@ -1,6 +1,6 @@
 # 深度登记 gridlab（多采样率遥测对齐与缺口修复）
 
-- 规模：中型（7 个功能模块 / 6 个页面 + base / 63 条测试）
+- 规模：中型（8 个功能模块 / 6 个页面 + base / 109 条测试）
 - 核心规则一：**时钟校正与分钟网格**——真值时间 = 采样时刻 − 设备偏移，偏移按 `[effective_from, effective_to)` 解析；同一传感器同一分钟重复按质量位 good > suspect > bad 择一，仍并列取到达较晚的一条；1 分钟桶为 `[t, t+1min)`，15 分钟窗口右端开。
 - 核心规则二：**缺口修复与覆盖度**——应有桶按采样率派生；连续缺席 ≤3 桶按传感器声明策略补齐（hold 取前值、linear 按桶距等分）并标 FILLED，>3 桶记 GAP 不插值；窗口覆盖度 = 实有 / 应有，低于 0.8 标 PARTIAL。
 - 使用者与工作流：环境监测站数据组每天接手 36 只传感器的 1 / 5 / 15 分钟混合导出件，设备时钟漂移 2–90 秒，报表按 15 分钟汇总；原先用表格手工对齐、缺口靠猜，现在一次导入即得「可采纳样本 + 1 分钟网格 + 补齐与缺口 + 窗口覆盖 + 四账」。
@@ -16,6 +16,7 @@
 | M5 缺口修复 | 看缺口段、补齐值与补齐校验 | GET /api/gaps、POST /api/gaps/repair、页面 /gaps | `app/modules/m5_gaps/fill.py` `app/modules/m5_gaps/repair.py` `app/modules/m5_gaps/policy.py` | `tests/test_m5_gaps.py` |
 | M6 批次与对账 | 查批次清单、四账与差异归因 | GET /api/batches、GET /api/reconcile、页面 /batches | `app/modules/m6_batches/compare.py` `app/modules/m6_batches/history.py` `app/modules/m6_batches/diff.py` `app/modules/m6_batches/service.py` | `tests/test_m6_batches.py` |
 | M7 导出 | 导出网格、采纳、隔离 CSV 与运行清单，点单元格看证据 | GET /api/export/grid.csv、GET /api/export/manifest.json、GET /api/export/evidence | `app/modules/m7_export/csv_out.py` `app/modules/m7_export/manifest_out.py` `app/modules/m7_export/evidence.py` | `tests/test_m7_export.py` |
+| M8 隔离补正 | 对隔离坏行登记补正草稿、预览影响窗口、受控整批替换正式结果 | POST /api/corrections、GET /api/corrections/preview、POST /api/corrections/promote、页面 /quality | `app/modules/m8_corrections/service.py` `app/modules/m8_corrections/validation.py` `app/modules/m8_corrections/derive.py` `app/modules/m8_corrections/impact.py` | `tests/test_m8_corrections.py` `tests/test_m8_api.py` `tests/test_m8_invariants.py` |
 
 端到端：`tests/test_e2e.py`（自带脏样例 → 采信 → 隔离 → 网格 → 缺口 → 四账 → 导出，含 4xx 失败输入与重跑）。
 不变量：`tests/test_invariants.py`（行账守恒、网格守恒、幂等重跑、补齐不回流）。
@@ -35,6 +36,8 @@
 | TRAP-16 | 导出件最后一行在中间被截断 | 半行被当有效数据，凭空多一条采样 | 无结尾换行且列数不足即判尾行截断，整行拒绝 | `app/modules/m1_intake/reader.py` | `tests/test_m1_samples.py::test_trap_16_truncated_tail_rejected` |
 | TRAP-18 | 0 字节 / 全空行 / 仅表头 三种空态 | 都返回「导入 0 行」，使用者不知道差在哪 | 三种空态分别给 EMPTY_FILE / ALL_BLANK / HEADER_ONLY 结论 | `app/modules/m1_intake/reader.py`、`app/modules/m1_intake/service.py` | `tests/test_m1_samples.py::test_trap_18_three_empty_states` |
 | TRAP-23 | 15 分钟窗口端点 00:15:00 归属哪一侧 | 两端都算，同一采样进两个窗口 | 声明左闭右开 `[start, end)`，端点归右窗口 | `app/modules/m4_grid/windows.py` | `tests/test_m4_grid.py::test_trap_23_window_is_half_open` |
+| TRAP-24 | 补正坏行后整批重传会换掉已核对的窗口与证据，只补坏行又难证一一对应 | 直接改正式表，失败留半张表、补正行冒充正常采纳 | 补正先落草稿并按首采同规则校验，按 `source_row` 一一对应；显式 promote 在单事务内整批替换，原始证据不改写、失败回滚留 FAILED 修订 | `app/modules/m8_corrections/service.py` `app/modules/m8_corrections/derive.py` | `tests/test_m8_corrections.py` `tests/test_m8_invariants.py` |
+| TRAP-25 | 补正桶与既有采纳桶撞键，朴素计数让行账对不平 | 用「原隔离−补正数」算仍隔离，漏掉新增重复 | 从 duplicates 表还原基础重复行参与重推，撞键补正进 duplicates，仍隔离按「原隔离−真正进采纳的补正」计算 | `app/modules/m8_corrections/derive.py` | `tests/test_m8_corrections.py::test_correction_colliding_existing_bucket_goes_to_duplicates` |
 
 ## 对账规则
 
@@ -48,6 +51,7 @@
 
 - 反例（朴素实现会挂）：`tests/test_m4_grid.py::test_trap_14_tie_breaks_on_later_arrival`（按文件顺序取第一条会保留 39.5，正确保留迟到的 39.9）、`tests/test_m2_timebase.py::test_naive_local_bucket_differs`（不校正偏移会把 00:15:20 记成 00:15，正确是 00:15:00 减去 20 秒后的 00:15——写成 00:15:20 再取分钟则落到 00:15，看似相同但偏移 90 秒的 PM-02 会整体错位一分）、`tests/test_m1_samples.py::test_naive_splitlines_would_break_records`、`tests/test_m5_gaps.py::test_naive_fill_all_gaps_would_invent_values`（把 10 桶缺口也插值会凭空造 10 个值）。
 - 不变量：`tests/test_invariants.py::test_row_account_conserved`（行账守恒）、`tests/test_invariants.py::test_grid_account_conserved`（网格守恒）、`tests/test_invariants.py::test_rerun_is_idempotent`（幂等重跑行数与合计不变）、`tests/test_invariants.py::test_filled_values_do_not_leak_into_accepted`（补齐不回流）。
+- 补正不变量：`tests/test_m8_invariants.py`（原始 intake/offsets/quarantine 只读、补正按批次隔离、重导仍幂等、替换后两账守恒、网格点数不丢、补正与隔离行一一对应、失败无补正痕迹泄漏）。
 - 端到端：`tests/test_e2e.py::test_full_pipeline_to_export`。
 
 ## 已知不覆盖
@@ -57,3 +61,5 @@
 - DST 切换日按「偏移表区间重叠即歧义」处理，不做时区数据库推算；偏移表把切换日拆成两段即可表达，重叠则整行隔离。
 - 单位换算只覆盖 %RH、µg/m³、ppm、ppb、m/s、hPa 的写法归一，不做量纲换算（例如不把 ppb 折算成 µg/m³）。
 - 15 分钟窗口覆盖度按「桶数」计算，不按采样点数；同一分钟内的多次采样在去重阶段已收敛为一条。
+- 隔离补正只支持行级可修正原因（哨兵、数值、越界、单位、质量位、采样率、时间、偏移歧义）；列数不符、尾行截断、空文件等结构性损坏不开放逐行补正，必须修复源文件后整批重传。
+- 补正不做多人协作与审批流，也不保留补正草稿的多版本历史；同一补正位重复提交覆盖草稿并累加 `attempts`，正式修订版本只在 promote 成功/失败时登记。

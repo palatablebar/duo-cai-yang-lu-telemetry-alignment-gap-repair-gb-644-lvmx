@@ -55,6 +55,17 @@ def export_quarantine(run_id: str | None = Query(default=None, max_length=64)):
     return _download(body, f"quarantine-{target}.csv")
 
 
+@router.get("/api/export/corrections.csv")
+def export_corrections(run_id: str | None = Query(default=None, max_length=64)):
+    conn = store.session()
+    try:
+        target = service.resolve(conn, run_id)
+        body = service.corrections_csv(conn, target)
+    finally:
+        conn.close()
+    return _download(body, f"corrections-{target}.csv")
+
+
 @router.get("/api/export/manifest.json")
 def export_manifest(run_id: str | None = Query(default=None, max_length=64)):
     conn = store.session()

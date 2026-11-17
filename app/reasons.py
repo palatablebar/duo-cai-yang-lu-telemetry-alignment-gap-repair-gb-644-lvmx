@@ -46,6 +46,8 @@ _REASONS = (
     Reason("GAP_TOO_LONG", "缺口超限", False),
     Reason("EDGE_NO_ANCHOR", "边缘无锚点", False),
     Reason("PARTIAL_COVERAGE", "覆盖不足", False),
+    # —— 补正层（M8） ——
+    Reason("CORRECTED_ADOPT", "补正采纳", False),
 )
 
 REASONS = {item.code: item for item in _REASONS}

@@ -41,6 +41,18 @@ def cell(conn, run_id: str, sensor_id: str, bucket_utc: str) -> dict | None:
             (run_id, sensor_id, bucket_utc),
         )
     ]
+    correction = None
+    if source_row is not None:
+        correction_row = store.one(
+            conn,
+            "SELECT correction_id, source_row, status, value_text, bucket_utc, quality,"
+            " validate_code, validate_detail, attempts, created_at, updated_at, note"
+            " FROM corrections WHERE run_id = ? AND source_row = ?",
+            (run_id, source_row),
+        )
+        if correction_row is not None:
+            correction = dict(correction_row)
+    flags = (sample["flags"] if sample else "") or ""
     return {
         "run_id": run_id,
         "sensor_id": grid["sensor_id"],
@@ -55,9 +67,11 @@ def cell(conn, run_id: str, sensor_id: str, bucket_utc: str) -> dict | None:
         "quality": sample["quality"] if sample else None,
         "ingest_seq": sample["ingest_seq"] if sample else None,
         "offset_seconds": sample["offset_seconds"] if sample else None,
-        "flags": (sample["flags"] if sample else "") or "",
+        "flags": flags,
+        "origin": "CORRECTED" if "CORRECTED_ADOPT" in flags.split(",") else "ORIGINAL",
         "quarantine": quarantined,
         "duplicates": duplicates,
+        "correction": correction,
     }
 
 

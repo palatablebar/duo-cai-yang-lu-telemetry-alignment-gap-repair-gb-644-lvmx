@@ -1,11 +1,14 @@
 {% extends "base.html" %}
 {% block title %}质量{% endblock %}
-{% block statusline %}{% if view %}隔离 {{ view.summary.quarantined }} 行{% else %}无运行{% endif %}{% endblock %}
+{% block statusline %}{% if view %}隔离 {{ view.summary.quarantined }} 行 · 补正草稿 {{ corrections.summary.drafts if corrections else 0 }} 条{% else %}无运行{% endif %}{% endblock %}
 
 {% block body %}
 <section class="sheet-head">
-  <h1 class="h1">质量隔离</h1>
-  <a class="link" href="/api/quarantine.csv">隔离 CSV</a>
+  <h1 class="h1">质量隔离与坏行补正</h1>
+  <div class="head-tools">
+    <a class="link" href="/api/quarantine.csv">隔离 CSV</a>
+    <a class="link" href="/api/corrections/revisions">修订版本 JSON</a>
+  </div>
 </section>
 
 {% if view %}
@@ -17,15 +20,25 @@
   <div class="scroll">
     <table class="sheet-grid" data-sheet>
       <thead>
-        <tr class="letters"><th class="gutter"></th><th>A</th><th class="num">B</th></tr>
-        <tr class="cols"><th class="gutter">#</th><th>项</th><th class="num">值</th></tr>
+        <tr class="letters"><th class="gutter"></th><th>A</th><th class="num">B</th><th class="num">C</th><th class="num">D</th></tr>
+        <tr class="cols"><th class="gutter">#</th><th>项</th><th class="num">原始</th><th class="num">待补正</th><th class="num">已生效</th></tr>
       </thead>
       <tbody>
-        <tr><th class="gutter">1</th><td tabindex="0">原始行</td><td tabindex="0" class="num">{{ view.summary.raw }}</td></tr>
-        <tr><th class="gutter">2</th><td tabindex="0">采纳</td><td tabindex="0" class="num">{{ view.summary.accepted }}</td></tr>
-        <tr><th class="gutter">3</th><td tabindex="0">重复</td><td tabindex="0" class="num">{{ view.summary.duplicates }}</td></tr>
-        <tr><th class="gutter">4</th><td tabindex="0">隔离</td><td tabindex="0" class="num">{{ view.summary.quarantined }}</td></tr>
-        <tr><th class="gutter">5</th><td tabindex="0">非 good 质量位</td><td tabindex="0" class="num">{{ view.summary.suspect }}</td></tr>
+        <tr><th class="gutter">1</th><td tabindex="0">隔离行</td>
+          <td tabindex="0" class="num">{{ view.summary.quarantined }}</td>
+          <td tabindex="0" class="num">{{ corrections.summary.quarantined - corrections.summary.promoted if corrections else view.summary.quarantined }}</td>
+          <td tabindex="0" class="num">{{ corrections.summary.promoted if corrections else 0 }}</td></tr>
+        <tr><th class="gutter">2</th><td tabindex="0">补正草稿（校验通过 / 未通过）</td>
+          <td tabindex="0" class="num">{{ corrections.summary.drafts if corrections else 0 }}</td>
+          <td tabindex="0" class="num">{{ corrections.summary.valid_drafts if corrections else 0 }}</td>
+          <td tabindex="0" class="num">{{ corrections.summary.invalid_drafts if corrections else 0 }}</td></tr>
+        <tr><th class="gutter">3</th><td tabindex="0">结构性损坏（不可逐行补正）</td>
+          <td tabindex="0" class="num">{{ corrections.summary.not_correctable if corrections else 0 }}</td>
+          <td tabindex="0" class="num">—</td><td tabindex="0" class="num">—</td></tr>
+        <tr><th class="gutter">4</th><td tabindex="0">采纳 / 重复</td>
+          <td tabindex="0" class="num">{{ view.summary.accepted }}</td>
+          <td tabindex="0" class="num">{{ view.summary.duplicates }}</td>
+          <td tabindex="0" class="num">—</td></tr>
       </tbody>
     </table>
   </div>
@@ -56,38 +69,180 @@
   </div>
 </section>
 
-<section class="block">
+<section class="block grow">
   <div class="block-head">
-    <h2 class="h2">隔离行</h2>
-    <span class="block-meta mono">{{ view.rows|length }} / {{ view.summary.quarantined }}</span>
+    <h2 class="h2">隔离行与补正状态</h2>
+    <span class="block-meta mono">未补正的行不会进入采纳</span>
   </div>
-  {% if view.rows %}
   <div class="scroll tall">
-    <table class="sheet-grid wide" data-sheet>
+    <table class="sheet-grid wide" id="quarantine-table" data-sheet>
       <thead>
-        <tr class="letters"><th class="gutter"></th><th>A</th><th class="num">B</th><th>C</th><th>D</th><th>E</th><th>F</th></tr>
-        <tr class="cols"><th class="gutter">#</th><th>行号</th><th class="num">传感器</th><th>列</th><th>原值</th><th>原因码</th><th>说明</th></tr>
+        <tr class="letters"><th class="gutter"></th><th>A</th><th class="num">B</th><th>C</th><th>D</th><th>E</th><th>F</th><th>G</th><th>H</th><th>I</th></tr>
+        <tr class="cols"><th class="gutter">#</th><th>行号</th><th class="num">传感器</th><th>列</th><th>原值</th><th>原因码</th><th>补正状态</th><th>补正值 / 桶</th><th>校验</th><th>操作</th></tr>
       </thead>
       <tbody>
-        {% for row in view.rows %}
-        <tr>
+        {% for row in corrections.rows %}
+        <tr data-source-row="{{ row.source_row }}" data-correctable="{{ '1' if row.correctable else '0' }}">
           <th class="gutter">{{ loop.index }}</th>
           <td tabindex="0" class="num">{{ row.source_row }}</td>
           <td tabindex="0" class="mono">{{ row.sensor_id or "—" }}</td>
-          <td tabindex="0" class="mono">{{ row.column_name }}</td>
+          <td tabindex="0" class="mono">{{ row.column_name if row.column_name else "—" }}</td>
           <td tabindex="0" class="mono" title="{{ row.raw_value }}">{{ row.raw_value }}</td>
-          <td tabindex="0" class="mono">{{ row.code }}</td>
-          <td tabindex="0">{{ row.detail }}</td>
+          <td tabindex="0" class="mono">{{ row.quarantine_code }}</td>
+          <td tabindex="0">
+            {% if not row.correction %}
+              <span class="tag bad">未补正</span>
+            {% elif row.correction.status == "PROMOTED" %}
+              <span class="tag ok">已生效</span>
+            {% elif row.correction.validation.ok %}
+              <span class="tag warn">草稿·待替换</span>
+            {% else %}
+              <span class="tag bad">草稿·未通过</span>
+            {% endif %}
+          </td>
+          <td tabindex="0" class="mono">
+            {% if row.correction %}{{ row.correction.value_text or "—" }} · {{ row.correction.bucket_utc or "—" }}{% else %}—{% endif %}
+          </td>
+          <td tabindex="0" class="mono">
+            {% if not row.correction %}—
+            {% elif row.correction.validation.ok %}<span class="tag ok">通过</span>
+            {% else %}<span title="{{ row.correction.validation.detail }}">{{ row.correction.validation.code }}</span>{% endif %}
+          </td>
+          <td>
+            {% if row.correctable and (not row.correction or row.correction.status != "PROMOTED") %}
+            <button class="btn ghost js-correct" type="button"
+              data-source-row="{{ row.source_row }}"
+              data-sensor="{{ row.sensor_id or '' }}"
+              data-time="{{ row.correction.sampled_at if row.correction and row.correction.sampled_at else '' }}"
+              data-offset="{{ row.correction.offset_seconds if row.correction and row.correction.offset_seconds is not none else '' }}"
+              data-value="{{ row.correction.value_text if row.correction and row.correction.value_text is not none else '' }}"
+              data-unit="{{ row.correction.unit_text if row.correction and row.correction.unit_text else '' }}"
+              data-quality="{{ row.correction.quality if row.correction and row.correction.quality else 'good' }}"
+              data-seq="{{ row.correction.ingest_seq if row.correction and row.correction.ingest_seq is not none else '' }}"
+              data-note="{{ row.correction.note if row.correction and row.correction.note else '' }}">{{ "改草稿" if row.correction else "补正" }}</button>
+            {% elif row.correction and row.correction.status == "PROMOTED" %}
+            <span class="mono">v{{ row.correction.attempts }} 已替换</span>
+            {% else %}
+            <span class="mono" title="结构性损坏需整批重传，不能逐行补正">不可补正</span>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+</section>
+
+<section class="block" id="correction-editor" hidden>
+  <div class="block-head">
+    <h2 class="h2">补正登记 · 原始行 <span id="editor-row" class="mono"></span></h2>
+    <span class="block-meta mono">补正与原行按行号一一对应</span>
+  </div>
+  <form id="correction-form" class="import">
+    <input type="hidden" id="c-source-row" name="source_row">
+    <label class="field"><span class="field-k">传感器</span><input id="c-sensor" name="sensor_id" maxlength="32" required></label>
+    <label class="field"><span class="field-k">采样时刻</span><input id="c-time" name="sampled_at" maxlength="40" placeholder="2026-03-01T00:26:20Z" required></label>
+    <label class="field"><span class="field-k">偏移秒</span><input id="c-offset" name="offset_seconds" type="number" style="width:80px"></label>
+    <label class="field"><span class="field-k">值</span><input id="c-value" name="value" maxlength="64" required></label>
+    <label class="field"><span class="field-k">单位</span><input id="c-unit" name="unit" maxlength="16"></label>
+    <label class="field"><span class="field-k">质量位</span>
+      <select id="c-quality" name="quality"><option value="good">good</option><option value="suspect">suspect</option><option value="bad">bad</option></select>
+    </label>
+    <label class="field"><span class="field-k">到达序</span><input id="c-seq" name="ingest_seq" type="number" style="width:90px"></label>
+    <label class="field"><span class="field-k">备注</span><input id="c-note" name="note" maxlength="200" style="width:160px"></label>
+    <button class="btn" type="submit" id="c-submit">保存草稿</button>
+    <button class="btn ghost" type="button" id="c-cancel">取消</button>
+  </form>
+  <p class="hint" id="correction-hint"></p>
+</section>
+
+<section class="block">
+  <div class="block-head">
+    <h2 class="h2">替换影响预览（草稿尚未改动正式结果）</h2>
+    <span class="block-meta mono">{{ preview.window_changes|length if preview and preview.has_preview else 0 }} 个窗口会变</span>
+  </div>
+  {% if preview and preview.has_preview %}
+  <div class="scroll">
+    <table class="sheet-grid" data-sheet>
+      <thead>
+        <tr class="letters"><th class="gutter"></th><th>A</th><th class="num">B</th><th class="num">C</th><th class="num">D</th><th class="num">E</th><th>F</th><th>G</th></tr>
+        <tr class="cols"><th class="gutter">#</th><th>传感器 / 窗口</th><th class="num">旧实有</th><th class="num">新实有</th><th class="num">旧覆盖</th><th class="num">新覆盖</th><th>旧状态</th><th>新状态</th></tr>
+      </thead>
+      <tbody>
+        {% for chg in preview.window_changes %}
+        <tr>
+          <th class="gutter">{{ loop.index }}</th>
+          <td tabindex="0" class="mono">{{ chg.after.sensor_id if chg.after else chg.before.sensor_id }} · {{ (chg.after.window_start if chg.after else chg.before.window_start)|f_cn("%m-%d %H:%M") }}</td>
+          <td tabindex="0" class="num">{{ chg.before.observed if chg.before else "—" }}</td>
+          <td tabindex="0" class="num">{{ chg.after.observed if chg.after else "—" }}</td>
+          <td tabindex="0" class="num">{{ chg.before.coverage|f_pct if chg.before else "—" }}</td>
+          <td tabindex="0" class="num">{{ chg.after.coverage|f_pct if chg.after else "—" }}</td>
+          <td tabindex="0"><span class="tag {{ 'ok' if chg.before and chg.before.state == 'OK' else 'warn' }}">{{ chg.before.state if chg.before else "—" }}</span></td>
+          <td tabindex="0"><span class="tag {{ 'ok' if chg.after and chg.after.state == 'OK' else 'warn' }}">{{ chg.after.state if chg.after else "—" }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="scroll" style="margin-top:8px">
+    <table class="sheet-grid" data-sheet>
+      <thead>
+        <tr class="letters"><th class="gutter"></th><th>A</th><th class="num">B</th><th class="num">C</th><th class="num">D</th></tr>
+        <tr class="cols"><th class="gutter">#</th><th>缺口覆盖</th><th class="num">实有</th><th class="num">补齐</th><th class="num">缺口</th></tr>
+      </thead>
+      <tbody>
+        <tr><th class="gutter">1</th><td tabindex="0">正式结果（当前）</td>
+          <td tabindex="0" class="num">{{ preview.coverage.before.observed }}</td>
+          <td tabindex="0" class="num">{{ preview.coverage.before.filled }}</td>
+          <td tabindex="0" class="num">{{ preview.coverage.before.gaps }}</td></tr>
+        <tr><th class="gutter">2</th><td tabindex="0">补正后（预览）</td>
+          <td tabindex="0" class="num">{{ preview.coverage.after.observed }}</td>
+          <td tabindex="0" class="num">{{ preview.coverage.after.filled }}</td>
+          <td tabindex="0" class="num">{{ preview.coverage.after.gaps }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="import" style="margin-top:10px">
+    <button class="btn" type="button" id="promote-btn">用 {{ corrections.summary.valid_drafts }} 条通过校验的补正替换正式结果</button>
+    <span class="hint" id="promote-hint">替换在单事务内完成；失败自动回滚，保留当前正式结果与原始证据。</span>
+  </div>
   {% else %}
-  <section class="empty"><p class="empty-text">没有隔离行。</p></section>
+  <section class="empty"><p class="empty-text">还没有校验通过的补正草稿；先在上方对隔离行登记补正。</p></section>
   {% endif %}
 </section>
+
+{% if corrections.revisions %}
+<section class="block">
+  <div class="block-head">
+    <h2 class="h2">修订版本</h2>
+    <span class="block-meta mono">同一批补正重跑不新增版本</span>
+  </div>
+  <div class="scroll">
+    <table class="sheet-grid" data-sheet>
+      <thead>
+        <tr class="letters"><th class="gutter"></th><th>A</th><th>B</th><th>C</th><th class="num">D</th><th>E</th></tr>
+        <tr class="cols"><th class="gutter">#</th><th>版本</th><th>状态</th><th>生效时间</th><th class="num">补正数</th><th>失败原因</th></tr>
+      </thead>
+      <tbody>
+        {% for rev in corrections.revisions %}
+        <tr>
+          <th class="gutter">{{ loop.index }}</th>
+          <td tabindex="0" class="mono">v{{ rev.revision_no }}</td>
+          <td tabindex="0"><span class="tag {{ 'ok' if rev.state == 'PROMOTED' else ('bad' if rev.state == 'FAILED' else 'warn') }}">{{ rev.state }}</span></td>
+          <td tabindex="0" class="mono">{{ rev.promoted_at or "—" }}</td>
+          <td tabindex="0" class="num">{{ rev.correction_ids|length }}</td>
+          <td tabindex="0" class="mono">{{ rev.error_code or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 {% else %}
 <section class="empty"><p class="empty-text">还没有隔离结果。</p></section>
 {% endif %}
 {% endblock %}
+
+{% block scripts %}<script src="/static/corrections.js"></script>{% endblock %}

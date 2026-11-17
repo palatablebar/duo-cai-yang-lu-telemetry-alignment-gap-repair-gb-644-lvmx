@@ -35,6 +35,11 @@ def quarantine_csv(conn, run_id: str) -> str:
     return "\ufeff" + quarantine_store.to_csv(quarantine_store.rows_of(conn, run_id))
 
 
+def corrections_csv(conn, run_id: str) -> str:
+    columns, rows = csv_out.correction_export(conn, run_id)
+    return "\ufeff" + csv_out.write_csv(columns, rows)
+
+
 def manifest_text(conn, run_id: str) -> str:
     return manifest_out.to_text(manifest_out.build(conn, run_id))
 
@@ -44,6 +49,28 @@ def summary(conn, run_id: str) -> dict:
     if run is None:
         raise NotFoundError("批次不存在", code="RUN_NOT_FOUND", detail={"run_id": run_id})
     manifest = manifest_out.build(conn, run_id)
+    corrected = int(
+        store.value(
+            conn,
+            "SELECT COUNT(*) FROM corrections WHERE run_id = ? AND status = 'PROMOTED'",
+            (run_id,),
+            0,
+        )
+    )
+    files = [
+        {"name": "网格 CSV", "path": "/api/export/grid.csv", "rows": run["counts"].get("grid_points", 0)},
+        {"name": "采纳 CSV", "path": "/api/export/accepted.csv", "rows": run["counts"].get("accepted", 0)},
+        {
+            "name": "隔离 CSV",
+            "path": "/api/export/quarantine.csv",
+            "rows": run["counts"].get("quarantined", 0),
+        },
+        {"name": "运行清单", "path": "/api/export/manifest.json", "rows": len(manifest.get("inputs", []))},
+    ]
+    if corrected:
+        files.append(
+            {"name": "补正台账 CSV", "path": "/api/export/corrections.csv", "rows": corrected}
+        )
     return {
         "run_id": run_id,
         "run_key": run["run_key"],
@@ -52,16 +79,8 @@ def summary(conn, run_id: str) -> dict:
         "inputs": manifest.get("inputs", []),
         "counts": run["counts"],
         "totals": run["totals"],
-        "files": [
-            {"name": "网格 CSV", "path": "/api/export/grid.csv", "rows": run["counts"].get("grid_points", 0)},
-            {"name": "采纳 CSV", "path": "/api/export/accepted.csv", "rows": run["counts"].get("accepted", 0)},
-            {
-                "name": "隔离 CSV",
-                "path": "/api/export/quarantine.csv",
-                "rows": run["counts"].get("quarantined", 0),
-            },
-            {"name": "运行清单", "path": "/api/export/manifest.json", "rows": len(manifest.get("inputs", []))},
-        ],
+        "corrected": corrected,
+        "files": files,
         "evidence": evidence.trailing(conn, run_id, limit=12),
         "stamp": store.value(
             conn, "SELECT COUNT(*) FROM grid WHERE run_id = ?", (run_id,), 0

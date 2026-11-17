@@ -36,6 +36,27 @@ ACCEPTED_COLUMNS = (
     "ingest_seq",
     "offset_seconds",
     "flags",
+    "origin",
+)
+
+CORRECTION_COLUMNS = (
+    "row_no",
+    "correction_id",
+    "source_row",
+    "status",
+    "sensor_id",
+    "sampled_at",
+    "bucket_utc",
+    "value",
+    "unit",
+    "quality",
+    "offset_seconds",
+    "attempts",
+    "validate_code",
+    "validate_detail",
+    "created_at",
+    "updated_at",
+    "note",
 )
 
 
@@ -88,6 +109,8 @@ def accepted_export(conn, run_id: str) -> tuple[tuple[str, ...], list[list]]:
     )
     payload = []
     for index, row in enumerate(rows, 1):
+        flags = row["flags"] or ""
+        origin = "CORRECTED" if "CORRECTED_ADOPT" in flags.split(",") else "ORIGINAL"
         payload.append(
             [
                 index,
@@ -99,7 +122,8 @@ def accepted_export(conn, run_id: str) -> tuple[tuple[str, ...], list[list]]:
                 row["quality"],
                 row["ingest_seq"],
                 row["offset_seconds"],
-                row["flags"] or "",
+                flags,
+                origin,
             ]
         )
     return ACCEPTED_COLUMNS, payload
@@ -111,3 +135,36 @@ def write_csv(columns: tuple[str, ...], rows: list[list]) -> str:
     writer.writerow(columns)
     writer.writerows(rows)
     return buffer.getvalue()
+
+
+def correction_export(conn, run_id: str) -> tuple[tuple[str, ...], list[list]]:
+    """补正台账 CSV：每条补正与原隔离行号一一对应，含状态、校验结论与尝试次数。"""
+    rows = store.rows(
+        conn,
+        "SELECT * FROM corrections WHERE run_id = ? ORDER BY source_row, correction_id",
+        (run_id,),
+    )
+    payload = []
+    for index, row in enumerate(rows, 1):
+        payload.append(
+            [
+                index,
+                row["correction_id"],
+                row["source_row"],
+                row["status"],
+                row["sensor_id"] or "",
+                row["sampled_at"] or "",
+                row["bucket_utc"] or "",
+                row["value_text"] or "",
+                row["unit_text"] or "",
+                row["quality"] or "",
+                "" if row["offset_seconds"] is None else row["offset_seconds"],
+                row["attempts"],
+                row["validate_code"] or "",
+                row["validate_detail"] or "",
+                row["created_at"],
+                row["updated_at"],
+                row["note"] or "",
+            ]
+        )
+    return CORRECTION_COLUMNS, payload

@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from app import errors, store, web
 from app.modules.m6_batches import history
+from app.modules.m8_corrections import service as correction_service
 
 from . import quarantine, service
 
@@ -30,9 +31,13 @@ def quality_page(request: Request):
     try:
         run = history.latest(conn)
         view = service.quality_view(conn, run["run_id"]) if run else None
+        corrections = correction_service.correction_view(conn, run["run_id"]) if run else None
+        preview = correction_service.preview_impact(conn, run["run_id"]) if run else None
     finally:
         conn.close()
-    return web.render(request, "quality.html", "quality", view=view)
+    return web.render(
+        request, "quality.html", "quality", view=view, corrections=corrections, preview=preview
+    )
 
 
 @router.get("/api/quarantine")
@@ -45,6 +50,7 @@ def quarantine_api(run_id: str | None = Query(default=None, max_length=64)):
             "rows": quarantine.rows_of(conn, target, limit=500),
             "distribution": quarantine.distribution(conn, target),
             "by_sensor": quarantine.by_sensor(conn, target),
+            "corrections": correction_service.correction_view(conn, target),
         }
     finally:
         conn.close()
